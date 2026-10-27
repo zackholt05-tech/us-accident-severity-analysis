@@ -7,6 +7,8 @@ An APMA 3150 team research project at the University of Virginia examining relat
 
 The saved notebook output records a cleaned dataset with **7,728,394 observations and 47 columns**, covering accidents from 2016 through March 2023. Several statistical analyses use random samples of up to one million observations.
 
+Read the [full research report](research-report.pdf), *An Analysis of United States Traffic Accidents* (June 2025), for the team's methods, results, and discussion. The [research poster](research-project.pdf) provides a visual summary.
+
 ## Analysis source
 
 | File | What it contains |
@@ -17,13 +19,14 @@ The saved notebook output records a cleaned dataset with **7,728,394 observation
 | [project.ipynb](project.ipynb) | An **R-kernel notebook** containing the shared preprocessing workflow and saved data summaries. |
 | [figures/](figures/) | 33 saved analysis figures. |
 | [tukey-results.csv](tukey-results.csv) | Exported Tukey comparison results. |
+| [research-report.pdf](research-report.pdf) | The team's full 13-page research report, dated June 2025. |
 | [research-project.pdf](research-project.pdf) | The team's final research poster. |
 
 ## Scope of this archive
 
-These are recovered original research files. The poster describes the team's broader work, including regression and random forest modeling. Standalone implementations of those models and the team's clustering work were not located in this recovery. They may be held by teammates. The available PCA, ANOVA, and bootstrap source is included here in full.
+These are recovered original research files. The report and poster describe the team's broader work, including regression and random forest modeling. Standalone implementations of those models and the team's clustering work were not located in this recovery. They may be held by teammates. The available PCA, ANOVA, and bootstrap source is included here in full.
 
-The analyses have not been rerun as part of recovery, and this archive does not claim to reproduce every result in the poster. The original source files are preserved byte for byte.
+The analyses have not been rerun as part of recovery, and this archive does not claim to reproduce every result in the report or poster. The original source files are preserved byte for byte.
 
 ## Local data and saved work
 
