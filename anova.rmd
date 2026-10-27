@@ -1,0 +1,746 @@
+---
+title: "One-way and Two-way Anova"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+  fig.path = "figures/",
+  fig.width = 6,
+  fig.height = 4,
+  dev = "png"
+)
+if (!dir.exists("figures")) dir.create("figures")
+```
+
+```{r load-cleaned-data}
+accidents <- readRDS("clean_accidents.rds")
+```
+
+```{r}
+library(tidyverse)
+```
+
+```{r anova-all-weather, warning=FALSE, message=FALSE}
+# # Anova no grouping to other
+# 1) Build clean two-column data.frame in base R
+df_all <- data.frame(
+  severity          = accidents$severity,
+  weather_condition = accidents$weather_condition,
+  stringsAsFactors  = FALSE
+)
+df_all <- na.omit(df_all)   # drop any rows with NA in either column
+
+# 2) Subsample 1000000 rows at random
+set.seed(2025)
+if (nrow(df_all) > 1000000) {
+  df_sub <- df_all[sample(nrow(df_all), 1000000), ]
+} else {
+  df_sub <- df_all
+}
+
+# 3) Run the one-way ANOVA
+aov_all <- aov(severity ~ weather_condition, data = df_sub)
+print(summary(aov_all))
+
+# 4) Tukey HSD post-hoc
+tukey_all <- TukeyHSD(aov_all)
+
+# 5) Pull out the weather_condition table, rank by absolute mean-difference
+tukey_df <- as.data.frame(tukey_all$weather_condition)
+tukey_df$comparison <- rownames(tukey_df)
+tukey_df <- tukey_df[order(-abs(tukey_df$diff)), ]
+
+```
+
+```{r}
+# Show the top 10 largest differences
+head(tukey_df, 10)
+```
+
+
+```{r}
+# Show entire tukey HSD post-hoc
+tukey_all <- TukeyHSD(aov_all)
+
+# convert the weather_condition table into a data.frame
+tukey_df <- as.data.frame(tukey_all$weather_condition, 
+                          row.names = NULL,
+                          stringsAsFactors = FALSE)
+# add a column of comparisons
+tukey_df$comparison <- rownames(tukey_all$weather_condition)
+
+# reorder columns
+tukey_df <- tukey_df[, c("comparison", "diff", "lwr", "upr", "p adj")]
+
+# print it all
+print(tukey_df, n = nrow(tukey_df))
+```
+
+```{r}
+library(dplyr)
+library(ggplot2)
+library(forcats)
+
+# Limit to top 10 most frequent conditions
+top10 <- df_sub %>%
+  mutate(weather_top10 = fct_lump(fct_infreq(weather_condition), n = 10)) %>%
+  filter(weather_top10 != "Other")
+
+# Violin + boxplot
+ggplot(top10, aes(weather_top10, severity)) +
+  geom_violin(fill="#4C72B0", alpha=0.3) +
+  geom_boxplot(width=0.1, outlier.size=0.5) +
+  labs(title="Severity by Top 10 Weather Conditions",
+       x="Weather Condition", y="Severity") +
+  theme_minimal(base_size=14) +
+  theme(axis.text.x=element_text(angle=45, hjust=1))
+```
+
+```{r}
+library(dplyr)
+library(ggplot2)
+
+# Compute means and CI for top10
+grp <- top10 %>%
+  group_by(weather_top10) %>%
+  summarize(
+    m = mean(severity),
+    se = sd(severity)/sqrt(n())
+  )
+
+ggplot(grp, aes(weather_top10, m)) +
+  geom_point(size=3) +
+  geom_errorbar(aes(ymin=m-1.96*se, ymax=m+1.96*se), width=0.2) +
+  labs(title="Mean Severity ±95% CI: Top 10 Conditions",
+       x="Weather Condition", y="Mean Severity") +
+  theme_minimal(base_size=14) +
+  theme(axis.text.x=element_text(angle=45, hjust=1))
+```
+
+```{r}
+# Residual plots for aov_all
+par(mfrow=c(1,2))
+plot(aov_all, which=1, main="Residuals vs Fitted")
+plot(aov_all, which=2, main="Normal Q-Q")
+par(mfrow=c(1,1))
+```
+```{r}
+# Anova with grouping to get rid of rare conditions
+# 1) Filter out NAs and immediately sample 1000000 rows
+set.seed(2025)
+acc_sample <- accidents %>%
+  filter(!is.na(severity), !is.na(weather_condition)) %>%
+  slice_sample(n = 1000000)
+
+# 2) Create the 5‐level weather group on the much smaller sample
+df_grouped <- acc_sample %>%
+  mutate(
+    weather_grp = case_when(
+      str_detect(weather_condition, regex("rain",   ignore_case = TRUE)) ~ "Rain",
+      str_detect(weather_condition, regex("snow|sleet|ice|hail", ignore_case = TRUE)) ~ "Snow/Ice",
+      str_detect(weather_condition, regex("clear|fair", ignore_case = TRUE)) ~ "Clear",
+      str_detect(weather_condition, regex("cloud|overcast", ignore_case = TRUE)) ~ "Cloudy",
+      TRUE ~ "Other"
+    )
+  )
+
+# 3) Exlude other conditions 
+df_grouped <- df_grouped %>% filter(weather_grp != "Other")
+
+# 4) Check counts per group
+print(table(df_grouped$weather_grp))
+
+# 5) Run one‐way ANOVA on these 5 groups
+aov_grp <- aov(severity ~ weather_grp, data = df_grouped)
+print(summary(aov_grp))
+
+# 6) Tukey HSD for those 5 levels
+tukey_grp <- TukeyHSD(aov_grp)
+print(tukey_grp)
+```
+
+```{r}
+library(ggplot2)
+
+ggplot(df_grouped, aes(weather_grp, severity)) +
+  geom_violin(fill="#4C72B0", alpha=0.3) +
+  geom_boxplot(width=0.1) +
+  labs(title="Severity Distribution by Broad Weather Groups",
+       x="Weather Group", y="Severity") +
+  theme_minimal(base_size=14)
+```
+
+```{r}
+library(dplyr)
+library(ggplot2)
+
+# Recompute group means & SE
+gm2 <- df_grouped %>%
+  group_by(weather_grp) %>%
+  summarize(
+    m  = mean(severity),
+    se = sd(severity) / sqrt(n())
+  )
+
+# Compute zoom limits
+ymin <- min(gm2$m - 1.96 * gm2$se) - 0.005
+ymax <- max(gm2$m + 1.96 * gm2$se) + 0.005
+
+# Plot with zoomed y-axis
+ggplot(gm2, aes(weather_grp, m)) +
+  geom_col(fill = "#4C72B0") +
+  geom_errorbar(aes(ymin = m - 1.96*se, ymax = m + 1.96*se),
+                width = 0.2) +
+  coord_cartesian(ylim = c(ymin, ymax)) +
+  labs(
+    title = "Mean Severity ±95% CI by Broad Weather Groups (Zoomed)",
+    x     = "Weather Group",
+    y     = "Mean Severity"
+  ) +
+  theme_minimal(base_size = 14)
+```
+```{r}
+library(multcomp)
+library(multcompView)
+library(emmeans)
+library(ggplot2)
+
+# Get estimated marginal means and CLD letters
+cld2 <- cld(emmeans(aov_grp, ~weather_grp), Letters = letters)
+cld2df <- as.data.frame(cld2)
+
+# Plot with points, error bars, and CLD letters
+ggplot(cld2df, aes(x = weather_grp, y = emmean)) +
+  geom_point(size = 4, color = "#4C72B0") +
+  geom_errorbar(aes(ymin = lower.CL, ymax = upper.CL), width = 0.2, color = "#4C72B0") +
+  geom_text(aes(label = .group), vjust = -1.2, size = 5) +
+  labs(
+    title = "Tukey CLD with 95% CI: Broad Weather Groups",
+    x = "Weather Group",
+    y = "Mean Severity"
+  ) +
+  theme_minimal(base_size = 14)
+
+```
+
+```{r}
+par(mfrow=c(1,2))
+plot(aov_grp, which=1, main="Res vs Fit")
+plot(aov_grp, which=2, main="Normal Q-Q")
+par(mfrow=c(1,1))
+```
+
+```{r}
+# ANOVA just for Rain
+library(dplyr)
+
+# 1) Flag any precipitation
+df_rain <- accidents %>%
+  filter(!is.na(severity), !is.na(precipitation_in)) %>%
+  mutate(rain_flag = precipitation_in > 0)
+
+# 2) Balanced subsample: equal number of dry and wet crashes
+set.seed(2025)
+
+min_n <- df_rain %>%
+  count(rain_flag) %>%
+  pull(n) %>%
+  min()
+
+df_rain_sub <- df_rain %>%
+  group_by(rain_flag) %>%
+  slice_sample(n = min_n) %>%
+  ungroup()
+
+# 3) Compare means: t-test
+t_res <- t.test(severity ~ rain_flag, data = df_rain_sub)
+print(t_res)
+
+# 4) Equivalent ANOVA
+aov_rain <- aov(severity ~ rain_flag, data = df_rain_sub)
+print(summary(aov_rain))
+
+```
+```{r}
+ggplot(df_rain_sub, aes(x = rain_flag, fill = factor(severity))) +
+  geom_bar(position = "fill") +
+  labs(x = "Rain Condition", y = "Proportion", fill = "Severity") +
+  scale_x_discrete(labels = c("Dry", "Wet")) +
+  ggtitle("Crash Severity Composition: Dry vs Wet Conditions") +
+  theme_minimal()
+```
+```{r}
+library(dplyr)
+library(ggplot2)
+
+df_rain_sub %>%
+  group_by(rain_flag) %>%
+  summarise(mean_sev = mean(severity),
+            se = sd(severity)/sqrt(n())) %>%
+  mutate(rain_flag = factor(rain_flag, labels = c("Dry", "Wet"))) %>%
+  ggplot(aes(x = rain_flag, y = mean_sev, fill = rain_flag)) +
+  geom_col(width = 0.6) +
+  geom_errorbar(aes(ymin = mean_sev - 1.96*se, ymax = mean_sev + 1.96*se),
+                width = 0.2) +
+  labs(x = "Rain Condition", y = "Mean Severity",
+       title = "Mean Crash Severity ± 95% CI") +
+  scale_fill_manual(values = c("#4C72B0", "#DD8452")) +
+  theme_minimal(base_size = 14)
+
+ggplot(df_rain_sub, aes(x = factor(rain_flag), y = severity, color = rain_flag)) +
+  geom_jitter(alpha = 0.05, width = 0.2) +
+  stat_summary(fun = mean, geom = "crossbar", width = 0.5, color = "black") +
+  scale_color_manual(values = c("#4C72B0", "#DD8452"), labels = c("Dry", "Wet")) +
+  labs(x = "Wet?", y = "Severity", title = "Crash Severity by Rain Condition (Jittered)") +
+  theme_minimal(base_size = 14)
+```
+
+```{r}
+library(dplyr)
+library(ggplot2)
+
+rm3 <- df_rain_sub %>%
+  group_by(rain_flag) %>%
+  summarize(m=mean(severity), se=sd(severity)/sqrt(n()))
+
+ggplot(rm3, aes(factor(rain_flag), m)) +
+  geom_point(size=3) +
+  geom_errorbar(aes(ymin=m-1.96*se, ymax=m+1.96*se), width=0.2) +
+  labs(x="Wet?", y="Mean Severity ±95% CI",
+       title="Mean Severity by Dry vs Wet") +
+  theme_minimal(base_size=14)
+```
+
+```{r}
+par(mfrow=c(1,2))
+plot(aov_rain, which=1, main="Res vs Fit (Rain)")
+plot(aov_rain, which=2, main="Normal Q-Q (Rain)")
+par(mfrow=c(1,1))
+```
+
+# Two way Anova (Weather vs time of day on severity)
+```{r}
+# 1) Start from the same 1M-row sample you used before
+set.seed(2025)
+df2 <- accidents %>%
+  filter(!is.na(severity), !is.na(weather_condition)) %>%
+  slice_sample(n = 1000000)
+
+# 2) Create your four-level weather_grp
+df2 <- df2 %>%
+  mutate(
+    weather_grp = case_when(
+      str_detect(weather_condition, regex("rain", ignore_case=TRUE)) ~ "Rain",
+      str_detect(weather_condition, regex("snow|sleet|ice|hail", ignore_case=TRUE)) ~ "Snow/Ice",
+      str_detect(weather_condition, regex("clear|fair", ignore_case=TRUE)) ~ "Clear",
+      str_detect(weather_condition, regex("cloud|overcast", ignore_case=TRUE)) ~ "Cloudy",
+      TRUE ~ "Other"
+    )
+  ) %>%
+  filter(weather_grp != "Other")
+
+# 3) Define time_of_day
+df2 <- df2 %>%
+  mutate(hour = hour(start_time),
+         time_of_day = case_when(
+           hour >= 5  & hour < 12 ~ "Morning",
+           hour >= 12 & hour < 17 ~ "Afternoon",
+           hour >= 17 & hour < 21 ~ "Evening",
+           TRUE                  ~ "Night"
+         ))
+
+# 4) Fit the two-way ANOVA
+two_way <- aov(severity ~ weather_grp * time_of_day, data = df2)
+summary(two_way)
+
+# 5) If the interaction is significant:
+interaction.plot(df2$time_of_day, df2$weather_grp, df2$severity,
+                 ylab="Mean Severity", xlab="Time of Day",
+                 trace.label="Weather")
+
+# 6) Post-hoc (if you want pairwise within each time block)
+library(emmeans)
+emmeans(two_way, pairwise ~ weather_grp | time_of_day)
+```
+```{r}
+interaction.plot(df2$time_of_day, df2$weather_grp, df2$severity,
+                 ylab="Mean Severity", xlab="Time of Day",
+                 trace.label="Weather")
+```
+
+```{r}
+ #  Line Plot of Means ± 95% CI by Time + Weather
+ggplot(summary_df, aes(x = time_of_day, y = mean_sev, group = weather_grp, color = weather_grp)) +
+  geom_line(linewidth = 1.1) +
+  geom_point(size = 3) +
+  geom_errorbar(aes(ymin = mean_sev - 1.96*se, ymax = mean_sev + 1.96*se),
+                width = 0.2) +
+  labs(
+    title = "Mean Crash Severity by Weather and Time of Day",
+    x = "Time of Day",
+    y = "Mean Severity",
+    color = "Weather"
+  ) +
+  theme_minimal(base_size = 14)
+
+```
+
+```{r}
+library(reshape2)
+library(ggplot2)
+
+mat4 <- tapply(df2$severity, list(df2$time_of_day, df2$weather_grp), mean)
+long4 <- melt(mat4, varnames=c("time_of_day","weather_grp"), value.name="mean_sev")
+
+ggplot(long4, aes(weather_grp, time_of_day, fill=mean_sev)) +
+  geom_tile() +
+  scale_fill_viridis_c(name="Mean Severity") +
+  labs(title="Heatmap: Severity by Weather & Time") +
+  theme_minimal(base_size=14)
+```
+
+```{r}
+par(mfrow=c(1,2))
+plot(two_way, which=1); plot(two_way, which=2)
+par(mfrow=c(1,1))
+```
+
+
+```{r}
+# 0) Common setup: sample once, keep a ~1M-row data.frame
+set.seed(2025)
+
+# Ensure you don’t request more rows than exist
+n_sample <- min(1e6, nrow(accidents))
+
+idx   <- sample(seq_len(nrow(accidents)), n_sample)
+small <- accidents[idx, ]
+```
+
+# 1) Traffic Signal × Time of Day
+```{r}
+library(dplyr)
+library(lubridate)
+
+df_signal <- small %>%
+  transmute(
+    severity,
+    signal_flag   = traffic_signal,
+    start_hour    = hour(start_time)
+  ) %>%
+  mutate(
+    time_of_day = case_when(
+      start_hour >= 5  & start_hour < 12 ~ "Morning",
+      start_hour >= 12 & start_hour < 17 ~ "Afternoon",
+      start_hour >= 17 & start_hour < 21 ~ "Evening",
+      TRUE                                ~ "Night"
+    )
+  )
+
+aov_signal_time <- aov(severity ~ signal_flag * time_of_day, data = df_signal)
+summary(aov_signal_time)
+```
+```{r}
+library(emmeans)
+
+# Pairwise comparisons of signal_flag *within* each time_of_day block
+emmeans(aov_signal_time, pairwise ~ signal_flag | time_of_day)
+```
+
+```{r}
+library(reshape2)
+library(viridis)
+ mat5 <- tapply(df_signal$severity, list(df_signal$time_of_day, df_signal$signal_flag), mean)
+ long5 <- melt(mat5, varnames=c("time_of_day","signal_flag"), value.name="mean_sev")
+ ggplot(long5, aes(signal_flag, time_of_day, fill=mean_sev)) +
+  geom_tile() + scale_fill_viridis(name="Mean Sev") +
+  labs(title="Heatmap: Signal × Time") + theme_minimal(base_size=14)
+```
+```{r}
+library(dplyr)
+library(ggplot2)
+library(emmeans)
+
+# Get group means and CI
+signal_summary <- emmeans(aov_signal_time, ~ signal_flag | time_of_day) %>%
+  as.data.frame()
+
+# Line plot with CI
+ggplot(signal_summary, aes(x = time_of_day, y = emmean, color = signal_flag, group = signal_flag)) +
+  geom_line(linewidth = 1.1) +
+  geom_point(size = 3) +
+  geom_errorbar(aes(ymin = lower.CL, ymax = upper.CL), width = 0.2) +
+  labs(title = "Mean Crash Severity by Traffic Signal × Time of Day",
+       x = "Time of Day", y = "Mean Severity ± 95% CI",
+       color = "Traffic Signal") +
+  theme_minimal(base_size = 14)
+```
+
+```{r}
+par(mfrow=c(1,2))
+plot(aov_signal_time, which=1); plot(aov_signal_time, which=2)
+par(mfrow=c(1,1))
+```
+
+# 2) Bump × Weather Group
+```{r}
+library(dplyr)
+library(stringr)
+
+df_bump <- small %>%
+  transmute(
+    severity,
+    bump_flag         = bump,
+    weather_condition
+  ) %>%
+  mutate(
+    weather_grp = case_when(
+      str_detect(weather_condition, regex("rain",       ignore_case = TRUE)) ~ "Rain",
+      str_detect(weather_condition, regex("snow|sleet|ice|hail", ignore_case = TRUE)) ~ "Snow/Ice",
+      str_detect(weather_condition, regex("clear|fair", ignore_case = TRUE)) ~ "Clear",
+      str_detect(weather_condition, regex("cloud|overcast", ignore_case = TRUE)) ~ "Cloudy",
+      TRUE ~ "Other"
+    )
+  ) %>%
+  filter(weather_grp != "Other")
+
+aov_bump_weather <- aov(severity ~ bump_flag * weather_grp, data = df_bump)
+summary(aov_bump_weather)
+```
+
+```{r}
+emmeans(aov_bump_weather, pairwise ~ bump_flag | weather_grp)
+```
+
+```{r}
+mat6 <- tapply(df_bump$severity, list(df_bump$bump_flag, df_bump$weather_grp), mean)
+long6 <- melt(mat6, varnames=c("bump_flag","weather_grp"), value.name="mean_sev")
+
+ggplot(long6, aes(weather_grp, bump_flag, fill=mean_sev)) +
+  geom_tile() + scale_fill_viridis(name="Mean Sev") +
+  labs(title="Heatmap: Bump × Weather") + theme_minimal(base_size=14)
+```
+
+```{r}
+bump_summary <- emmeans(aov_bump_weather, ~ bump_flag | weather_grp) %>%
+  as.data.frame() %>%
+  filter(!is.na(emmean), !is.na(weather_grp), !is.na(bump_flag))
+ggplot(bump_summary, aes(x = weather_grp, y = emmean, color = bump_flag, group = bump_flag)) +
+  geom_line(linewidth = 1.1) +
+  geom_point(size = 3) +
+  geom_errorbar(aes(ymin = lower.CL, ymax = upper.CL), width = 0.2) +
+  labs(title = "Mean Crash Severity by Bump × Weather Group",
+       x = "Weather Group", y = "Mean Severity ± 95% CI",
+       color = "Bump") +
+  theme_minimal(base_size = 14)
+```
+
+```{r}
+par(mfrow=c(1,2))
+plot(aov_bump_weather, which=1); plot(aov_bump_weather, which=2)
+par(mfrow=c(1,1))
+```
+# 3) Civil Twilight Phase × Weather Group 
+```{r}
+library(dplyr)
+library(stringr)
+
+df_twi <- small %>%
+  transmute(
+    severity,
+    twilight          = civil_twilight,
+    weather_condition
+  ) %>%
+  mutate(
+    weather_grp = case_when(
+      str_detect(weather_condition, regex("rain",       ignore_case = TRUE)) ~ "Rain",
+      str_detect(weather_condition, regex("snow|sleet|ice|hail", ignore_case = TRUE)) ~ "Snow/Ice",
+      str_detect(weather_condition, regex("clear|fair", ignore_case = TRUE)) ~ "Clear",
+      str_detect(weather_condition, regex("cloud|overcast", ignore_case = TRUE)) ~ "Cloudy",
+      TRUE ~ "Other"
+    )
+  ) %>%
+  filter(weather_grp != "Other")
+
+aov_twi_weather <- aov(severity ~ twilight * weather_grp, data = df_twi)
+summary(aov_twi_weather)
+```
+```{r}
+emmeans(aov_twi_weather, pairwise ~ twilight | weather_grp)
+```
+
+```{r}
+mat7 <- tapply(df_twi$severity, list(df_twi$twilight, df_twi$weather_grp), mean)
+long7 <- melt(mat7, varnames=c("twilight","weather_grp"), value.name="mean_sev")
+
+ggplot(long7, aes(weather_grp, twilight, fill=mean_sev)) +
+  geom_tile() + scale_fill_viridis(name="Mean Sev") +
+  labs(title="Heatmap: Twilight × Weather") + theme_minimal(base_size=14)
+```
+
+```{r}
+twi_summary <- emmeans(aov_twi_weather, ~ twilight | weather_grp) %>%
+  as.data.frame()
+
+ggplot(twi_summary, aes(x = weather_grp, y = emmean, color = twilight, group = twilight)) +
+  geom_line(linewidth = 1.1) +
+  geom_point(size = 3) +
+  geom_errorbar(aes(ymin = lower.CL, ymax = upper.CL), width = 0.2) +
+  labs(title = "Mean Crash Severity by Twilight × Weather Group",
+       x = "Weather Group", y = "Mean Severity ± 95% CI",
+       color = "Twilight Phase") +
+  theme_minimal(base_size = 14)
+```
+
+```{r}
+par(mfrow=c(1,2))
+plot(aov_twi_weather, which=1); plot(aov_twi_weather, which=2)
+par(mfrow=c(1,1))
+```
+
+# 4) Weekend vs. Weekday × Weather Group
+```{r}
+library(dplyr)
+library(stringr)
+library(lubridate)
+
+df_weekend <- small %>%
+  transmute(
+    severity,
+    weather_condition,
+    is_weekend = wday(start_time) %in% c(1, 7)  # Sunday=1, Saturday=7
+  ) %>%
+  mutate(
+    weather_grp = case_when(
+      str_detect(weather_condition, regex("rain",       ignore_case = TRUE)) ~ "Rain",
+      str_detect(weather_condition, regex("snow|sleet|ice|hail", ignore_case = TRUE)) ~ "Snow/Ice",
+      str_detect(weather_condition, regex("clear|fair", ignore_case = TRUE)) ~ "Clear",
+      str_detect(weather_condition, regex("cloud|overcast", ignore_case = TRUE)) ~ "Cloudy",
+      TRUE ~ "Other"
+    )
+  ) %>%
+  filter(weather_grp != "Other")
+
+aov_weekend_weather <- aov(severity ~ is_weekend * weather_grp, data = df_weekend)
+summary(aov_weekend_weather)
+```
+
+```{r}
+emmeans(aov_weekend_weather, pairwise ~ is_weekend | weather_grp)
+```
+
+```{r}
+mat8 <- tapply(df_weekend$severity, list(df_weekend$is_weekend, df_weekend$weather_grp), mean)
+long8 <- melt(mat8, varnames=c("is_weekend","weather_grp"), value.name="mean_sev")
+
+ggplot(long8, aes(weather_grp, factor(is_weekend), fill=mean_sev)) +
+  geom_tile() + scale_fill_viridis(name="Mean Sev") +
+  labs(title="Heatmap: Weekend × Weather") + theme_minimal(base_size=14)
+```
+
+```{r}
+weekend_summary <- emmeans(aov_weekend_weather, ~ is_weekend | weather_grp) %>%
+  as.data.frame() %>%
+  mutate(is_weekend = ifelse(is_weekend, "Weekend", "Weekday"))
+
+ggplot(weekend_summary, aes(x = weather_grp, y = emmean, color = is_weekend, group = is_weekend)) +
+  geom_line(linewidth = 1.1) +
+  geom_point(size = 3) +
+  geom_errorbar(aes(ymin = lower.CL, ymax = upper.CL), width = 0.2) +
+  labs(title = "Mean Crash Severity by Weekend × Weather Group",
+       x = "Weather Group", y = "Mean Severity ± 95% CI",
+       color = "Day Type") +
+  theme_minimal(base_size = 14)
+```
+
+```{r}
+par(mfrow=c(1,2))
+plot(aov_weekend_weather, which=1); plot(aov_weekend_weather, which=2)
+par(mfrow=c(1,1))
+```
+
+```{r}
+library(ggplot2)
+
+effect_sizes <- data.frame(
+  Interaction = c(
+    "Weather Condition (Raw)",     # One-way full condition
+    "Bump × Weather Group",        # Two-way
+    "Signal × Time of Day",        # Two-way
+    "Rain Flag (Dry vs Wet)",      # One-way
+    "Weather × Time of Day",       # Two-way
+    "Weather Group (5-level)",     # One-way grouped
+    "Weekend × Weather Group",     # Two-way
+    "Twilight × Weather Group"     # Two-way
+  ),
+  Max_Diff = c(
+    0.3756,  # Top Tukey HSD diff
+    0.2495,  # Bump x Weather (Rain)
+    0.1659,  # Signal x Time (Morning)
+    0.1025,  # Dry vs Wet (t-test estimate)
+    0.0826,  # Weather x Time (estimated range)
+    0.0761,  # Clear vs Rain in grouped weather
+    0.0559,  # Weekend vs Weekday (Cloudy)
+    0.0281   # Day vs Night (Snow/Ice)
+  )
+)
+
+effect_sizes <- effect_sizes %>% arrange(desc(Max_Diff))
+
+ggplot(effect_sizes, aes(x = reorder(Interaction, Max_Diff), y = Max_Diff)) +
+  geom_col(fill = "#4C72B0") +
+  geom_text(aes(label = round(Max_Diff, 3)), hjust = -0.1) +
+  coord_flip() +
+  labs(title = "Maximum Estimated Crash Severity Differences",
+       x = "Factor / Interaction",
+       y = "Max Estimated Difference in Mean Severity") +
+  theme_minimal(base_size = 14)
+```
+
+```{r}
+library(fmsb)
+
+# Use the same weather order across groups
+weather_levels <- c("Clear", "Cloudy", "Rain", "Snow/Ice")
+
+# Extract means from each emmeans summary (values from your post)
+radar_df <- data.frame(
+  Group = c("No Signal", "Signal (Yes)",
+            "No Bump", "Bump (Yes)",
+            "Weekend", "Weekday",
+            "Day", "Twilight (Night)"),
+  Clear    = c(2.235, 2.069, 2.185, 2.109, 2.213, 2.180, 2.180, 2.198),
+  Cloudy   = c(2.234, 2.117, 2.234, 2.117, 2.282, 2.226, 2.230, 2.247),
+  Rain     = c(2.250, 2.000, 2.250, 2.000, 2.289, 2.242, 2.249, 2.250),
+  Snow_Ice = c(2.236, NA,    2.236, NA,    2.255, 2.232, 2.247, 2.219)
+)
+
+# Keep only rows with complete values
+radar_df <- radar_df[complete.cases(radar_df), ]
+
+# fmsb needs 2 bounding rows (max, min) before actual data
+radar_ready <- rbind(
+  max = apply(radar_df[,-1], 2, max, na.rm = TRUE),
+  min = apply(radar_df[,-1], 2, min, na.rm = TRUE),
+  radar_df[,-1]
+)
+rownames(radar_ready) <- c("Max", "Min", radar_df$Group)
+
+# Draw chart
+radarchart(radar_ready,
+           axistype = 1,
+           pcol = rainbow(nrow(radar_df)),
+           plwd = 2,
+           plty = 1,
+           cglcol = "grey", cglty = 1,
+           axislabcol = "black",
+           caxislabels = seq(2.18, 2.30, 0.03),
+           vlcex = 0.8,
+           title = "Radar Chart: Mean Crash Severity by Condition × Weather")
+
+legend("topright", legend = radar_df$Group,
+       col = rainbow(nrow(radar_df)), lty = 1, lwd = 2, bty = "n")
+```
+save(list = ls(), file = "full_anova_workspace.RData")
+

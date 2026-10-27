@@ -1,0 +1,19 @@
+# Local R data, saved sessions, and console history
+*.rds
+*.RDS
+*.RData
+*.rdata
+.RData
+.Rhistory
+.Ruserdata
+.Rproj.user/
+.ipynb_checkpoints/
+
+# Presentation recording remains in the full local recovery
+*.mkv
+
+# Byte-identical duplicate of anova.rmd
+anovasss.rmd
+
+# Local operating-system files
+.DS_Store

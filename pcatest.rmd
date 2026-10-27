@@ -1,0 +1,277 @@
+---
+title: "ProjectFinal"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+---
+
+```{r}
+library(tidyverse)
+accidents <- read_csv("US_Accidents_March23.csv")
+# accidents <- read_csv("US_Accidents_March23_10pct.csv")
+
+# head(accidents)
+# glimpse(accidents)
+```
+
+```{r}
+library(janitor)
+
+accidents <- accidents %>%
+  clean_names()
+
+names(accidents)
+```
+
+```{r}
+library(lubridate)
+
+bool_cols <- c("amenity", "bump", "crossing", "give_way", "junction",
+               "no_exit", "railway", "roundabout", "station", "stop",
+               "traffic_calming", "traffic_signal", "turning_loop")
+
+accidents <- accidents %>%
+  mutate(across(all_of(bool_cols), ~ as.logical(.)))
+```
+
+```{r}
+accidents <- accidents %>% mutate(accident_duration_min = as.numeric(difftime(end_time, start_time, units = "mins")))
+```
+
+```{r}
+essential <- c("severity", "start_lat", "start_lng")
+
+accidents_clean <- accidents %>%
+  filter(if_all(all_of(essential), ~ !is.na(.)))
+
+accidents_clean <- accidents_clean %>% distinct(id, .keep_all = TRUE)
+```
+
+```{r}
+accidents <- accidents_clean
+```
+
+```{r}
+str(accidents)
+```
+
+```{r}
+summary(accidents)
+```
+
+```{r save-cleaned-data}
+saveRDS(accidents, file = "clean_accidents.rds")
+```
+# Analysis 1: PCA on Weather + Road Features
+
+# Goal: Reduce dimensionality and understand variance structure.
+```{r}
+#  1. Select Weather + Road Features
+weather_road_vars <- accidents %>%
+  dplyr::select(temperature_f, wind_chill_f, humidity_percent, pressure_in,
+         visibility_mi, wind_speed_mph, precipitation_in,
+         amenity, bump, crossing, give_way, junction,
+         no_exit, railway, roundabout, station, stop,
+         traffic_calming, traffic_signal)
+```
+
+```{r}
+# 2. Remove Rows with Missing Values
+pca_data <- weather_road_vars %>% drop_na()
+```
+
+```{r}
+# 3. Standardize the Data
+pca_data_scaled <- scale(pca_data)
+```
+
+```{r}
+# 4. Run PCA
+pca_result <- prcomp(pca_data_scaled, center = TRUE, scale. = TRUE)
+summary(pca_result)
+```
+
+```{r}
+library(factoextra)
+library(ggforce)
+library(ggplot2)
+library(scales)
+
+# Compute % variance
+eig_vals <- pca_result$sdev^2
+eig_df   <- data.frame(
+  PC       = seq_along(eig_vals),
+  Variance = eig_vals / sum(eig_vals) * 100
+)
+
+# Plot
+fig1_clean <- ggplot(eig_df, aes(PC, Variance)) +
+  geom_col(fill = "#4C72B0", width = 0.7) +
+  geom_line(aes(y = Variance), size = 0.8) +
+  geom_point(size = 2, color = "#DD8452") +
+  geom_text(aes(label = sprintf("%.1f%%", Variance)),
+            vjust = -0.5, size = 3) +
+  scale_x_continuous(breaks = eig_df$PC) +
+  scale_y_continuous(labels = percent_format(scale = 1)) +
+  labs(
+    title = "Scree Plot: Variance Explained by Principal Components",
+    x     = "Principal Component",
+    y     = "Percent of Variance"
+  ) +
+  theme_minimal(base_size = 14) +
+  theme(
+    panel.grid.minor = element_blank(),
+    panel.grid.major.x = element_blank()
+  )
+
+fig1_clean
+
+library(factoextra)
+library(ggplot2)
+
+# Top 10 contributors to PC1
+fig_c1 <- fviz_contrib(
+  pca_result,
+  choice = "var",
+  axes   = 1,
+  top    = 10
+) +
+  labs(
+    title = "Top 10 Variable Contributions to PC1",
+    x     = "Variable",
+    y     = "Contribution (%)"
+  ) +
+  theme_minimal(base_size = 14) +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+fig_c1
+
+library(pheatmap)
+
+# Extract loadings for PCs 1–5
+load_mat <- pca_result$rotation[, 1:5]
+
+# Draw heatmap
+pheatmap(
+  load_mat,
+  cluster_rows = FALSE,
+  cluster_cols = FALSE,
+  display_numbers = TRUE,
+  number_format   = "%.2f",
+  main = "Heatmap of Variable Loadings (PC1–PC5)"
+)
+```
+```{r}
+library(dplyr)
+library(ggplot2)
+library(hexbin) 
+
+# 1) Rebuild PCA input with severity, drop NAs
+pca_df <- accidents %>%
+  dplyr::select(
+    severity,
+    temperature_f, wind_chill_f, humidity_percent, pressure_in,
+    visibility_mi, wind_speed_mph, precipitation_in,
+    amenity, bump, crossing, give_way, junction,
+    no_exit, railway, roundabout, station, stop,
+    traffic_calming, traffic_signal
+  ) %>%
+  tidyr::drop_na()
+
+# 2) Ensure pca_result exists (you may skip if already computed)
+features_scaled <- scale(dplyr::select(pca_df, -severity))
+pca_result <- prcomp(features_scaled, center = TRUE, scale. = TRUE)
+
+# 3) Build a scores data.frame with severity
+scores_df <- as.data.frame(pca_result$x) %>%
+  mutate(severity = factor(pca_df$severity))
+
+# 4) Balanced subsample: 2k points per severity class
+set.seed(2025)
+scores_balanced <- scores_df %>%
+  group_by(severity) %>%
+  slice_sample(n = 2000) %>%
+  ungroup()
+
+# 5) Extract % variance for PC1–PC3
+imp    <- summary(pca_result)$importance
+pc1var <- imp[2,1] * 100
+pc2var <- imp[2,2] * 100
+pc3var <- imp[2,3] * 100
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Plot A: Balanced scatter PC1 vs PC2
+ggplot(scores_balanced, aes(PC1, PC2, color = severity)) +
+  geom_point(alpha = 0.6, size = 1) +
+  coord_equal() +
+  scale_color_brewer("Severity", palette = "Set1") +
+  labs(
+    title = "Balanced Subsample: PC1 vs PC2 by Severity",
+    x = sprintf("PC1 (%.1f%%)", pc1var),
+    y = sprintf("PC2 (%.1f%%)", pc2var)
+  ) +
+  theme_minimal(base_size = 14)
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Plot B: Hexbin density of ALL scores
+ggplot(scores_df, aes(PC1, PC2)) +
+  geom_hex(bins = 50) +
+  scale_fill_viridis_c(option = "C", trans = "log10", name = "Count") +
+  coord_equal() +
+  labs(
+    title = "Hexbin Density: PC1 vs PC2",
+    x = sprintf("PC1 (%.1f%%)", pc1var),
+    y = sprintf("PC2 (%.1f%%)", pc2var)
+  ) +
+  theme_minimal(base_size = 14)
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Plot C: Hexbin faceted by severity (balanced)
+ggplot(scores_balanced, aes(PC1, PC2)) +
+  geom_hex(bins = 40) +
+  facet_wrap(~ severity) +
+  coord_equal() +
+  labs(
+    title = "Hexbin: PC1 vs PC2 by Severity",
+    x = sprintf("PC1 (%.1f%%)", pc1var),
+    y = sprintf("PC2 (%.1f%%)", pc2var)
+  ) +
+  theme_minimal(base_size = 14)
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Plot D: 2D density contours by severity (balanced)
+ggplot(scores_balanced, aes(PC1, PC2, color = severity)) +
+  geom_density_2d(size = 1) +
+  coord_equal() +
+  scale_color_brewer("Severity", palette = "Set1") +
+  labs(
+    title = "2D Density Contours: PC1 vs PC2 by Severity",
+    x = sprintf("PC1 (%.1f%%)", pc1var),
+    y = sprintf("PC2 (%.1f%%)", pc2var)
+  ) +
+  theme_minimal(base_size = 14)
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Plot E: PC1 vs PC3 scatter (balanced)
+ggplot(scores_balanced, aes(PC1, PC3, color = severity)) +
+  geom_point(alpha = 0.6, size = 1) +
+  coord_equal() +
+  scale_color_brewer("Severity", palette = "Set1") +
+  labs(
+    title = "PC1 vs PC3 by Severity",
+    x = sprintf("PC1 (%.1f%%)", pc1var),
+    y = sprintf("PC3 (%.1f%%)", pc3var)
+  ) +
+  theme_minimal(base_size = 14)
+```
+
+```{r}
+# interpret
+loadings <- pca_result$rotation
+print(loadings[, 1:3])  # View first 3 PCs
+```
+save(list = ls(), file = "full_PCA_workspace.RData")
+

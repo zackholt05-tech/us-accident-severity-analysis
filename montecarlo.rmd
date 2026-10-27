@@ -1,0 +1,81 @@
+---
+title: "Montecarlotesting"
+author: "Zack Holt"
+date: "2025-06-12"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r load-cleaned-data}
+accidents <- readRDS("clean_accidents.rds")
+```
+
+```{r bootstrap-weather-anova, warning=FALSE, message=FALSE, fig.width=6, fig.height=4}
+# Bootstrap the ANOVA F-Statistic & Effect Sizes
+
+library(dplyr)
+library(tidyr)
+library(ggplot2)
+
+# ---- Parameters ----
+B <- 1000
+set.seed(2025)
+
+# ---- Pre-allocate ----
+boot <- tibble(
+  F_value             = numeric(B),
+  diff_Cloudy_Clear   = numeric(B),
+  diff_Rain_Clear     = numeric(B),
+  diff_SnowIce_Clear  = numeric(B)
+)
+
+# ---- Bootstrap loop ----
+n <- nrow(df_grouped)
+for (i in seq_len(B)) {
+  # sample WITH replacement
+  df_b <- df_grouped[sample.int(n, n, replace = TRUE), ]
+  
+  # fit one-way ANOVA
+  aov_b   <- aov(severity ~ weather_grp, data = df_b)
+  ssum    <- summary(aov_b)[[1]]
+  boot$F_value[i] <- ssum["weather_grp", "F value"]
+  
+  # extract Tukey diffs
+  td <- TukeyHSD(aov_b)$weather_grp
+  boot$diff_Cloudy_Clear[i]  <- td["Cloudy-Clear",  "diff"]
+  boot$diff_Rain_Clear[i]    <- td["Rain-Clear",    "diff"]
+  boot$diff_SnowIce_Clear[i] <- td["Snow/Ice-Clear","diff"]
+}
+
+# ---- Plot 1: F-statistic histogram ----
+ggplot(boot, aes(F_value)) +
+  geom_histogram(binwidth = 5, fill = "#4C72B0", color = "white") +
+  labs(
+    title = "Bootstrap Distribution of ANOVA F-Statistic",
+    x     = "F value for Weather Group",
+    y     = "Count"
+  ) +
+  theme_minimal(base_size = 14)
+
+# ---- Plot 2: Effect-size densities ----
+boot_long <- boot %>%
+  pivot_longer(
+    cols      = starts_with("diff_"),
+    names_to  = "contrast",
+    values_to = "diff"
+  )
+
+ggplot(boot_long, aes(x = diff, fill = contrast)) +
+  geom_density(alpha = 0.4) +
+  labs(
+    title = "Bootstrap Distribution of Mean Severity Differences\n(versus Clear)",
+    x     = "Mean Difference",
+    y     = "Density",
+    fill  = "Contrast"
+  ) +
+  theme_minimal(base_size = 14)
+
+```
